@@ -15,6 +15,7 @@
 #include "esp_err.h"
 #include "esp_tls.h"
 #include "esp_http_client.h"
+#include <stdlib.h> // Required for atoi
 /**
  * Should match your display model. Check repository WiKi: https://github.com/martinberlin/cale-idf/wiki
  * Needs 3 things: 
@@ -129,9 +130,18 @@ uint8_t color_palette_buffer[max_palette_pixels / 8]; // palette buffer for dept
 uint16_t totalDrawPixels = 0;
 int color = EPD_WHITE;
 uint64_t startTime = 0;
+static int http_max_age_seconds = -1; // Global static for HTTP Cache-Control max-age
 
-void deepsleep(){
-    esp_deep_sleep(1000000LL * 60 * CONFIG_DEEPSLEEP_MINUTES_AFTER_RENDER);
+
+void deepsleep(int max_age_sec){
+    if (max_age_sec >= 0) {
+        uint64_t sleep_duration_us = (uint64_t)max_age_sec * 1000000LL;
+        ESP_LOGI(TAG, "Using max-age for deep sleep: %d seconds", max_age_sec);
+        esp_deep_sleep(sleep_duration_us);
+    } else {
+        ESP_LOGI(TAG, "Using default deep sleep duration: %d minutes", CONFIG_DEEPSLEEP_MINUTES_AFTER_RENDER);
+        esp_deep_sleep(1000000LL * 60 * CONFIG_DEEPSLEEP_MINUTES_AFTER_RENDER);
+    }
 }
 
 esp_err_t _http_event_handler(esp_http_client_event_t *evt)
@@ -153,6 +163,41 @@ esp_err_t _http_event_handler(esp_http_client_event_t *evt)
         break;
     case HTTP_EVENT_ON_HEADER:
         ESP_LOGI(TAG, "HTTP_EVENT_ON_HEADER, key=%s, value=%s", evt->header_key, evt->header_value);
+        if (strcmp(evt->header_key, "Cache-Control") == 0) {
+            const char *max_age_str = strstr(evt->header_value, "max-age=");
+            if (max_age_str != NULL) {
+                max_age_str += strlen("max-age="); // Move pointer past "max-age="
+                int parsed_max_age = atoi(max_age_str);
+                if (parsed_max_age > 0) { // atoi returns 0 on error, ensure it's a valid positive number
+                    http_max_age_seconds = parsed_max_age;
+                    ESP_LOGI(TAG, "max-age found: %d", http_max_age_seconds);
+                } else {
+                    // Check if the value was actually "0" or if atoi failed
+                    bool is_zero = true;
+                    const char* p = max_age_str;
+                    while(*p) {
+                        if (isdigit(*p)) {
+                            if (*p != '0') {
+                                is_zero = false;
+                                break;
+                            }
+                        } else if (!isspace(*p)) { // allow whitespace around the number
+                            is_zero = false; // Non-digit, non-whitespace means error or other directives
+                            break;
+                        }
+                        p++;
+                    }
+                    if (is_zero && strchr(max_age_str, '0') != NULL) { // It was "0"
+                         http_max_age_seconds = 0;
+                         ESP_LOGI(TAG, "max-age found: %d", http_max_age_seconds);
+                    } else {
+                         ESP_LOGW(TAG, "Malformed Cache-Control header: %s. Could not parse max-age value or value is not a positive integer.", evt->header_value);
+                    }
+                }
+            } else {
+                ESP_LOGW(TAG, "Malformed Cache-Control header: %s. 'max-age=' not found.", evt->header_value);
+            }
+        }
         break;
     case HTTP_EVENT_ON_DATA:
         ++countDataEventCalls;
@@ -373,7 +418,7 @@ esp_err_t _http_event_handler(esp_http_client_event_t *evt)
             printf("Free heap after display render: %d\n", (int)xPortGetFreeHeapSize());
         // Go to deepsleep after rendering
         vTaskDelay(14000 / portTICK_PERIOD_MS);
-        deepsleep();
+        deepsleep(http_max_age_seconds);
         break;
 
     case HTTP_EVENT_DISCONNECTED:
@@ -397,6 +442,8 @@ static void http_post(void)
        timeout_ms set to 9 seconds since for large displays a dynamic BMP can take some seconds to be generated
      */
     
+    http_max_age_seconds = -1; // Reset before each new HTTP request cycle
+
     // POST Send the IP for logging purpouses
     char post_data[22];
     uint8_t postsize = sizeof(post_data);
@@ -465,7 +512,8 @@ static void event_handler(void *arg, esp_event_base_t event_base,
         {
             xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
             ESP_LOGI(TAG, "Connect to the AP failed %d times. Going to deepsleep %d minutes", (int)CONFIG_ESP_MAXIMUM_RETRY, (int)CONFIG_DEEPSLEEP_MINUTES_AFTER_RENDER);
-            deepsleep();
+            // Wi-Fi failure means HTTP request likely didn't happen or finish, pass -1 for default sleep.
+            deepsleep(-1);
         }
     }
     else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP)
