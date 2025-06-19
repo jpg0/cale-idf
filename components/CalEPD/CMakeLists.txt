@@ -46,7 +46,7 @@ set(srcs
     "models/color/gdeh042Z96.cpp"
     "models/color/gdeh042Z21.cpp"
     "models/color/gdeq042Z21.cpp"
-    #"models/color/wave12i48BR.cpp"
+    "models/color/wave12i48BR.cpp"
 
     "models/color/dke/dke075z83.cpp"
     # 7 colors ACEP
