@@ -22,6 +22,8 @@
 #define WAVE12I48_WIDTH 1304
 #define WAVE12I48_HEIGHT 984
 
+#define IS_COLOR_EPD true
+
 // 8 pix of this color in a buffer byte:
 // black channel inverted in update()
 #define WAVE12I48_8PIX_BLACK_INK   0xFF
