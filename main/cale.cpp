@@ -15,6 +15,8 @@
 #include "esp_err.h"
 #include "esp_tls.h"
 #include "esp_http_client.h"
+#include "sdkconfig.h" // For CONFIG_BATTERY_METRICS_ENABLE
+#include "battery_utils.h"
 /**
  * Should match your display model. Check repository WiKi: https://github.com/martinberlin/cale-idf/wiki
  * Needs 3 things: 
@@ -420,6 +422,48 @@ static void http_post(void)
 
     esp_http_client_set_header(client, "Authorization", bearerToken);
     esp_http_client_set_post_field(client, post_data, strlen(post_data));
+
+#if CONFIG_BATTERY_METRICS_ENABLE
+    ESP_LOGI(TAG, "Battery metrics enabled, attempting to read status.");
+    bool battery_present = is_battery_present();
+    float battery_voltage_at_pin = get_battery_voltage(); // This is voltage at ADC pin
+
+    uint8_t battery_percentage = 0;
+
+    if (battery_voltage_at_pin >= 0.0f) {
+        // Calculate actual battery voltage using Kconfig ratio for logging
+        float voltage_divider_ratio_float = (float)CONFIG_BATTERY_DIVIDER_RATIO_X100 / 100.0f;
+        if (voltage_divider_ratio_float < 0.01f) { // Basic sanity check
+            ESP_LOGW(TAG, "CONFIG_BATTERY_DIVIDER_RATIO_X100 in cale.cpp is invalid (%d), defaulting to 1.0x ratio for logging.", CONFIG_BATTERY_DIVIDER_RATIO_X100);
+            voltage_divider_ratio_float = 1.0f;
+        }
+        float actual_battery_voltage = battery_voltage_at_pin * voltage_divider_ratio_float;
+
+        battery_percentage = get_battery_charge_percentage(battery_voltage_at_pin, battery_present);
+
+        ESP_LOGI(TAG, "Battery Status: Present: %s, Voltage at Pin: %.2fV, Actual Voltage (est.): %.2fV, Charge: %d%%",
+                 battery_present ? "yes" : "no",
+                 battery_voltage_at_pin,
+                 actual_battery_voltage,
+                 battery_percentage);
+
+        char battery_charge_header_value[16];
+        snprintf(battery_charge_header_value, sizeof(battery_charge_header_value), "%d%%", battery_percentage);
+        esp_http_client_set_header(client, "X-Battery-Charge", battery_charge_header_value);
+
+        char battery_voltage_header_value[16];
+        // Report the voltage at the ADC pin. User can interpret with divider knowledge.
+        snprintf(battery_voltage_header_value, sizeof(battery_voltage_header_value), "%.2fV_pin", battery_voltage_at_pin);
+        esp_http_client_set_header(client, "X-Battery-Voltage-Pin", battery_voltage_header_value);
+
+        esp_http_client_set_header(client, "X-Battery-Present", battery_present ? "true" : "false");
+
+    } else {
+        ESP_LOGI(TAG, "Battery voltage reading was invalid or disabled (-1.0f). Skipping battery headers.");
+    }
+#else
+    ESP_LOGI(TAG, "Battery metrics disabled by Kconfig. No battery headers will be sent.");
+#endif
     
     esp_err_t err = esp_http_client_perform(client);
     if (err == ESP_OK)

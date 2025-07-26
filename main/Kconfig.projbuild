@@ -46,3 +46,65 @@ menu "CALE Configuration"
             Set the Maximum retry to avoid station reconnecting to the AP unlimited times.
 
 endmenu
+
+menu "Battery Measurement Configuration"
+
+    config BATTERY_METRICS_ENABLE
+        bool "Enable Battery Metrics Reporting"
+        default false
+        help
+            Enable reading of battery voltage and presence to report via HTTP headers.
+            If disabled, no battery metrics will be read or sent.
+
+    if BATTERY_METRICS_ENABLE
+
+        config BATTERY_ADC_CHANNEL
+            int "Battery Voltage ADC Channel"
+            range 0 9  # ADC1 on S2 has 10 channels (0-9)
+            default 0
+            help
+                Select the ADC1 channel connected to the battery voltage.
+                Ensure this channel is not used by other peripherals.
+                Common ADC pins on ESP32-S2 are GPIO1-GPIO10 for ADC1.
+
+        config BATTERY_SENSE_GPIO
+            int "Battery Presence Sense GPIO (-1 to disable)"
+            range -1 39
+            default -1
+            help
+                GPIO pin to sense battery presence. Set to -1 to disable this feature.
+                If enabled, the pin level indicates presence (logic depends on hardware).
+
+        config BATTERY_DIVIDER_RATIO_X100
+            int "Voltage Divider Ratio (x100)"
+            default 1100 # Represents 11.00
+            help
+                The voltage divider ratio used for battery voltage measurement.
+                This value should be the ratio multiplied by 100.
+                For example, if the measured voltage at the ADC pin (Vpin) is related
+                to actual battery voltage (Vbat) by Vbat = Vpin * RATIO, then enter
+                RATIO * 100 here.
+                - If no divider (direct connection, Vbat = Vpin), enter 100 (for 1.00).
+                - For a 2x divider (e.g. R1=R2, Vbat = Vpin * 2), enter 200.
+                - For the Olimex ESP32-S2-DevKit-Lipo-USB (11x), enter 1100.
+                Ensure this matches your hardware. The ADC pin voltage will be
+                multiplied by (this_value / 100.0) to get the estimated actual
+                battery voltage.
+
+        config BATTERY_MAX_VOLTAGE_MV
+            int "Battery Maximum Voltage (mV)"
+            default 4200
+            help
+                The voltage (in millivolts) corresponding to 100% battery charge.
+                Typically 4200mV for a single-cell LiPo battery.
+
+        config BATTERY_MIN_VOLTAGE_MV
+            int "Battery Minimum Voltage (mV)"
+            default 3000
+            help
+                The voltage (in millivolts) corresponding to 0% battery charge.
+                Typically 3000mV for a single-cell LiPo battery before cutoff.
+
+    endif # BATTERY_METRICS_ENABLE
+
+endmenu
