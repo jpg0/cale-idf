@@ -16,6 +16,7 @@
 #include "esp_tls.h"
 #include "esp_http_client.h"
 #include <stdlib.h> // Required for atoi
+#include "driver/adc.h"
 /**
  * Should match your display model. Check repository WiKi: https://github.com/martinberlin/cale-idf/wiki
  * Needs 3 things: 
@@ -132,6 +133,17 @@ int color = EPD_WHITE;
 uint64_t startTime = 0;
 static int http_max_age_seconds = -1; // Global static for HTTP Cache-Control max-age
 
+
+// GPIO8 (ADC1_CH7) via 4.7M/470k divider. Requires BAT_SENS_E1 jumper closed on board.
+static int read_battery_percent(void) {
+    adc1_config_width(ADC_WIDTH_BIT_12);
+    adc1_config_channel_atten(ADC1_CHANNEL_7, ADC_ATTEN_DB_11);
+    int sum = 0;
+    for (int i = 0; i < 8; i++) sum += adc1_get_raw(ADC1_CHANNEL_7);
+    float v_bat = (sum / 8 / 4095.0f) * 3.1f * 11.0f;
+    int pct = (int)((v_bat - 3.0f) / 1.2f * 100.0f);
+    return pct < 0 ? 0 : (pct > 100 ? 100 : pct);
+}
 
 void deepsleep(int max_age_sec){
     if (max_age_sec >= 0) {
@@ -466,6 +478,13 @@ static void http_post(void)
     printf("POST data: %s\n%s\n", post_data, bearerToken);
 
     esp_http_client_set_header(client, "Authorization", bearerToken);
+
+    int battery_pct = read_battery_percent();
+    char bat_header[5];
+    snprintf(bat_header, sizeof(bat_header), "%d", battery_pct);
+    esp_http_client_set_header(client, "X-Battery-Percent", bat_header);
+    ESP_LOGI(TAG, "Battery: %d%%", battery_pct);
+
     esp_http_client_set_post_field(client, post_data, strlen(post_data));
     
     esp_err_t err = esp_http_client_perform(client);
